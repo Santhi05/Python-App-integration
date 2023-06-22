@@ -1,0 +1,40 @@
+import os
+import numpy as np
+import pandas as pd
+import pyodbc
+import subprocess
+
+subprocess.run("""curl https://packages.microsoft.com/keys/microsoft.asc | apt-key add - &&
+curl https://packages.microsoft.com/config/ubuntu/16.04/prod.list > /etc/apt/sources.list.d/mssql-release.list &&
+apt-get update &&
+ACCEPT_EULA=Y apt-get install msodbcsql17""", shell=True, check=True)
+
+class DBconnection ():
+  def __init__(self):
+    self.driver =  'ODBC Driver 17 for SQL Server'
+    self.server =  'prod.db.tess-db.h1.co'
+    self.name = 'Tesseract'
+    self.UID =  'prasanthi.p'
+    self.pwd = '@Shore@1011#'
+    self.conn = None
+    print('DBconnection object is instantiated')
+    
+  def __enter__ (self):
+    self.conn = pyodbc.connect(DRIVER = self.driver, SERVER = self.server, DATABASE = self.name, UID = self.UID, PWD = self.pwd)
+    print ('Connected to the database')
+    return self
+    
+  def __exit__(self, exc_type, exc_value, exc_traceback):
+    if exc_traceback is None:
+      self.conn.commit()
+    else:
+      self.conn.rollback()
+      self.conn.close()
+    print('Closed the connection')
+
+  def consult (query):
+    with DBconnection() as cnxt:
+      print ('Ran the query')
+      output = pd.read_sql(query, cnxt.conn)
+      
+    return output
