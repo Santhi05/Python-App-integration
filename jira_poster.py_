@@ -1,0 +1,51 @@
+import jira as js
+from datetime import date
+import json 
+
+class JiraSecrets:
+  """Class to declare Jira credentials, it that takes:
+  user_email: str , with the jira user email.
+  api_token: str, token for the jira api."""
+  
+  def __init__(self, user_email:str ,api_token:str):
+    self.user_email = user_email
+    self.api_token = api_token
+  
+class JiraIssue:
+  """Class that takes the a JiraSecrets object"""
+  def __init__(self, credentials:JiraSecrets):
+    self.credentials = credentials
+  
+  def post(self, details:dict):
+    """Function that create an issue in Jira, it takes a dictionary with mandatory keys:
+    """
+    project = details.get('project')
+    parent = details.get('parent')
+    issuetype = details.get('issuetype')
+    summary = details.get('title')
+    summary = f'{summary} {date.today()}'
+    description = details.get('description')
+    assignee = details.get('assignee')
+    
+    loggin = js.JIRA('https://h1insights.atlassian.net',
+                     basic_auth=(self.credentials.user_email,self.credentials.api_token))
+    
+    loggin.create_issue(project=project,
+                        summary=summary,
+                        description=description,
+                        issuetype={'name': issuetype},
+                        parent={'key':parent},
+                        assignee={'accountId':assignee})
+    
+class notebookContext:
+    """notebook data extraction, URL and Path, getUrl, getPath"""
+    def __init__(self):
+      notebook_data = json.loads(dbutils.notebook.entry_point.getDbutils().notebook().getContext().toJson())
+      self.notebook_data = notebook_data
+      
+    def getURL(self):
+      notebook = self.notebook_data.get('tags')
+      return 'https://' + notebook.get('browserHostName') +'/?o' + notebook.get('orgId') + '#notebook/' + notebook.get('notebookId')
+    
+    def getPath(self):
+      return self.notebook_data.get('extraContext').get('notebook_path')
