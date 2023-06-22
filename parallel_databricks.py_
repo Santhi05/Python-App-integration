@@ -1,0 +1,78 @@
+from concurrent.futures import ThreadPoolExecutor
+from typing import Dict, Any, Optional, List
+from databricks.sdk.runtime import dbutils
+
+class Notebook:
+    """
+    A class representing a Databricks notebook.
+
+    Parameters
+    ----------
+    path : str
+        The path of the notebook to execute.
+    timeout : int
+        The maximum amount of time (in seconds) to wait for the notebook to complete.
+    parameters : dict, optional
+        A dictionary of notebook parameters to use when executing the notebook.
+    retry : int, optional
+        The number of times to retry executing the notebook if it fails.
+
+    Attributes
+    ----------
+    path : str
+        The path of the notebook to execute.
+    timeout : int
+        The maximum amount of time (in seconds) to wait for the notebook to complete.
+    parameters : dict
+        A dictionary of notebook parameters to use when executing the notebook.
+    retry : int
+        The number of times to retry executing the notebook if it fails.
+    """
+
+    def __init__(self, path: str, timeout: int, parameters: Optional[Dict[str, Any]] = None, retry: int = 0):
+        self.path = path
+        self.timeout = timeout
+        self.parameters = parameters
+        self.retry = retry
+
+    def submitNotebook(self):
+        """
+        Submit the notebook for execution.
+
+        Returns
+        -------
+        The result of the notebook execution.
+        """
+        print("Running notebook %s" % self.path)
+        try:
+            if self.parameters:
+                return dbutils.notebook.run(self.path, self.timeout, self.parameters)
+            else:
+                return dbutils.notebook.run(self.path, self.timeout)
+        except Exception:
+            if self.retry < 1:
+                raise
+        print("Retrying notebook %s" % self.path)
+        self.retry = self.retry - 1
+        self.submitNotebook()
+
+
+def parallelNotebooks(notebooks: List[Notebook], numInParallel: int) -> List:
+    """
+    Execute a list of notebooks in parallel.
+
+    Parameters
+    ----------
+    notebooks : List[NotebookData]
+        The list of notebooks to execute.
+    numInParallel : int
+        The maximum number of parallel notebook executions.
+
+    Returns
+    -------
+    A list of the results of each notebook execution.
+    """
+    # If you create too many notebooks in parallel the driver may crash when you submit all of the jobs at once.
+    # This code limits the number of parallel notebooks.
+    with ThreadPoolExecutor(max_workers=numInParallel) as ec:
+        return [ec.submit(notebook.submitNotebook) for notebook in notebooks]
