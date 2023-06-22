@@ -1,0 +1,229 @@
+import pygsheets
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build
+from google.oauth2 import service_account
+from googleapiclient.errors import HttpError
+from googleapiclient.http import MediaFileUpload
+from datetime import date
+import pandas as pd
+
+class DriveSecrets:
+  def __init__(self, client_secret_file):
+    self.client_secret_file = client_secret_file
+  
+class DriveLogger:
+  def __init__(self, secrets:DriveSecrets):
+    self.secrets = secrets
+    
+  def login(self):
+    credentials = service_account.Credentials.from_service_account_file(self.secrets.client_secret_file)
+    return credentials
+  
+class SheetCreator:
+  def __init__(self, file_name, folder_id, credentials):
+    self.file_name = file_name
+    self.folder_id = folder_id
+    self.credentials = credentials
+    
+  def create(self):
+    today = date.today().strftime("%Y%m%d")
+    API_Name = 'drive'
+    API_Version = 'v3'
+    service = build(API_Name,API_Version,credentials=self.credentials)
+    file_metadata = {'name': f'{self.file_name} {today}','parents': [self.folder_id],'mimeType': 'application/vnd.google-apps.spreadsheet'}
+    file = service.files().create(body=file_metadata, fields='id',supportsAllDrives=True).execute()
+    gsheetid=file.get('id')
+    
+    return gsheetid
+  
+class SheetLogger:
+  def __init__(self, secrets, gsheetid):
+    self.secrets = secrets
+    self.gsheetid = gsheetid
+  
+  def checkin(self):
+    gc = pygsheets.authorize(service_file= self.secrets.client_secret_file) 
+    rpt = gc.open_by_key(self.gsheetid)
+    return rpt
+  
+class PublishDataFrame:
+  """sheetstructure: type(dict) with 'worksheatname':'dataframe' as key value pairs"""
+  def __init__(self, checkin, sheetstructure):
+    self.checkin = checkin
+    self.sheetstructure = sheetstructure
+    
+  def upload(self):
+    firstsheet = list(self.sheetstructure.keys())[0]
+    firstdataframe = self.sheetstructure[firstsheet]
+    self.checkin.sheet1.title = firstsheet
+    self.checkin.worksheet_by_title(firstsheet).set_dataframe(firstdataframe,(1,1),copy_index=True, copy_head=True, extend=True, fit=False, escape_formulae=False)
+    self.checkin.worksheet_by_title(firstsheet).delete_cols(1)
+    
+    del self.sheetstructure[firstsheet]
+
+    for sheetname in self.sheetstructure:
+      frame = self.sheetstructure[sheetname]
+      self.checkin.add_worksheet(sheetname)
+      self.checkin.worksheet_by_title(sheetname).set_dataframe(frame,(1,1),copy_index=True, copy_head=True, extend=True, fit=False, escape_formulae=False)
+      self.checkin.worksheet_by_title(sheetname).delete_cols(1)
+      
+class PublicationMessage:
+  def __init__(self, folder_id, gsheetid):
+    self.folder_id = folder_id
+    self.gsheetid = gsheetid
+  
+  def show(self):
+    message = f"Sheet Uploaded to https://drive.google.com/drive/u/2/folders/{self.folder_id}"
+    pathgsheet = f"https://docs.google.com/spreadsheets/d/{self.gsheetid}"
+    return f"""{message} 
+                {pathgsheet}"""
+  
+class UploadGDrive:
+  def __init__(self, client_secrets, file_name, folder_id, sheetstructure):
+    self.client_secrets = client_secrets
+    self.file_name = file_name
+    self.folder_id = folder_id
+    self.sheetstructure = sheetstructure
+  
+  def run(self):
+    global sheet
+    secrets = DriveSecrets(client_secret_file = self.client_secrets)
+    credentials = DriveLogger(secrets = secrets).login()
+    sheet = SheetCreator(file_name = self.file_name, folder_id = self.folder_id, credentials = credentials).create()
+    checkin = SheetLogger(secrets = secrets, gsheetid = sheet).checkin()
+    PublishDataFrame(checkin = checkin, sheetstructure = self.sheetstructure).upload()
+    
+  def get_message(self):
+    return PublicationMessage(folder_id = self.folder_id, gsheetid = sheet).show()
+  
+
+class CreateGDriveFolder:
+    def __init__(self, client_secrets, new_folder_name, parent_folder_id):
+        self.client_secrets = client_secrets
+        self.new_folder_name = new_folder_name
+        self.parent_folder_id = parent_folder_id
+        
+    def create(self):
+        # Authenticate with the Google Drive API using a service account
+        credentials = service_account.Credentials.from_service_account_file(self.client_secrets)
+        drive_service = build('drive', 'v3', credentials=credentials)
+
+        # Search for the folder by name and parent folder ID
+        query = f"name='{self.new_folder_name}' and parents in '{self.parent_folder_id}' and trashed = false"
+        results = drive_service.files().list(q=query, fields='nextPageToken, files(id)', includeItemsFromAllDrives=True,
+                                              supportsAllDrives=True,).execute()
+        items = results.get('files', [])
+
+        # If the folder exists, return its ID
+        if items:
+            folder_id = items[0]['id']
+            print(f'Folder already exists: {folder_id}')
+            return folder_id
+
+        # If the folder doesn't exist, create it and return the ID
+        file_metadata = {
+            'name': self.new_folder_name,
+            'mimeType': 'application/vnd.google-apps.folder',
+            'parents': [self.parent_folder_id]
+        }
+        try:
+            folder = drive_service.files().create(body=file_metadata, fields='id', supportsAllDrives=True).execute()
+            print(f'Successfully created folder: {folder.get("id")}')
+            return folder.get("id")
+        except HttpError as error:
+            print(f'An error occurred: {error}')
+            return error
+
+class UploadCSVFileGDrive:
+  def __init__(self, client_secrets, file_path_csv, folder_id):
+    self.client_secrets = client_secrets
+    self.file_path_csv = file_path_csv
+    self.folder_id = folder_id
+
+  def upload_to_folder(self):
+  
+      try:
+          # create drive api client
+          credentials = service_account.Credentials.from_service_account_file(self.client_secrets)
+          service = build('drive', 'v3', credentials=credentials)
+
+          name = self.file_path_csv.split('/')[-1]
+
+          file_metadata = {
+              'name': name,
+              'parents': [self.folder_id]
+          }
+
+          media = MediaFileUpload(self.file_path_csv,
+                                  mimetype='text/csv', resumable=True)
+          # pylint: disable=maybe-no-member
+          file = service.files().create(body=file_metadata, media_body=media,
+                                        fields='id', supportsAllDrives=True).execute()
+          file_id = file.get("id")
+          print(F'File ID: "{file_id}".')
+          file_link = f'https://drive.google.com/file/d/{file_id}'
+          folder_link = f'https://drive.google.com/drive/folders/{self.folder_id}'
+          return {'message':{'link':file_link, 'folder_link':folder_link}}
+
+      except HttpError as error:
+          print(F'An error occurred: {error}')
+          return {'message':{'error':error}}
+      
+class GoogleSheetsUpdater:
+    def __init__(self, client_secrets: str, sheet_id: str, worksheet_name: str):
+        """
+        Initialize a new GoogleSheetsUpdater object.
+
+        Args:
+            client_secrets (str): The file path to your Google Sheets API credentials file (JSON format).
+            sheet_id (str): The ID of the Google Sheet you want to update.
+            worksheet_name (str): The name of the worksheet within the Google Sheet you want to update.
+        """
+        self.client_secrets = client_secrets
+        self.sheet_id = sheet_id
+        self.worksheet_name = worksheet_name
+        
+    def update_data(self, data_df: pd.DataFrame) -> None:
+        """
+        Update a Google Sheets worksheet with data from a pandas DataFrame.
+
+        Args:
+            data_df (pd.DataFrame): The DataFrame containing the data to update in the worksheet.
+
+        Raises:
+            ValueError: If the DataFrame is empty or has invalid column names.
+            Exception: If there is an error updating the worksheet.
+        """
+        if data_df.empty:
+            raise ValueError("DataFrame is empty")
+
+        # Check for invalid column names
+        invalid_chars = ['[', ']', '*', '/', '\\', '?']
+        invalid_cols = [col for col in data_df.columns if any(char in col for char in invalid_chars)]
+        if invalid_cols:
+            raise ValueError(f"Invalid column name(s) detected: {', '.join(invalid_cols)}")
+
+        # Load credentials and authorize access to Google Sheets
+        try:
+            gc = pygsheets.authorize(service_file=self.client_secrets)
+        except Exception as e:
+            raise Exception("Error authorizing access to Google Sheets API") from e
+
+        # Open the specified Google Sheet and worksheet
+        try:
+            sheet = gc.open_by_key(self.sheet_id)
+            worksheet = sheet.worksheet_by_title(self.worksheet_name)
+        except Exception as e:
+            raise Exception("Error opening Google Sheet or worksheet") from e
+
+        # Clear the current contents of the worksheet
+        try:
+            worksheet.clear()
+        except Exception as e:
+            raise Exception("Error clearing worksheet") from e
+
+        # Update the worksheet with the new data from the DataFrame
+        try:
+            worksheet.set_dataframe(data_df, start='A1')
+        except Exception as e:
+            raise Exception("Error updating worksheet with new data") from e
